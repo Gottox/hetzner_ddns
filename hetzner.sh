@@ -1,53 +1,60 @@
 #!/bin/sh
 
+# DEPS:
+# jq, curl
 # ENV:
 # __IP: IPv4 or IPv6 address to set
 # password: Hetzner Auth Token
 # domain: domain record to update.
 
-API_URL=https://dns.hetzner.com/api/v1
-TOKEN=${password}
-ZONE=${domain#*.}
-SUBDOMAIN=${domain%%.*}
-TTL=60
+local __API_URL __ZONE __SUBDOMAIN __TTL __TYPE __ID __RESULT_CODE __PAYLOAD
+
+__API_URL=https://dns.hetzner.com/api/v1
+__ZONE=${domain#*.}
+__SUBDOMAIN=${domain%%.*}
+__TTL=60
 if [ "$use_ipv6" -ne 0 ]; then
-	TYPE="AAAA"
+	__TYPE="AAAA"
 else
-	TYPE="A"
+	__TYPE="A"
 fi
 
-zone_id=$(curl -s -L -H Auth-API-Token": $TOKEN" \
-		$API_URL/zones/$ZONE | \
+__ZONE_ID=$(curl -s -L -H Auth-API-Token": $password" \
+		$__API_URL/zones/$__ZONE | \
 	jq -re '.zone.id')
-if [ $? -ne 0 ] || [ "$zone_id" == "" ]; then
-	echo "Error: Cannot find zone $ZONE" >&2
+if [ $? -ne 0 ] || [ "x$__ZONE_ID" = "x" ]; then
+	write_log 14 "Error: Cannot find zone '$__ZONE'"
 	exit 1
 fi
 
-id=$(curl -s -L -H Auth-API-Token": $TOKEN" \
-		$API_URL/records\?zone_id\=$zone_id | \
+__ID=$(curl -s -L -H Auth-API-Token": $password" \
+		$__API_URL/records\?zone_id\=$__ZONE_ID | \
 	jq -re ".records[] | select(.type==\"$TYPE\" and .name == \"home\") | .id")
-result_code=$?
+__RESULT_CODE=$?
 
-payload="{
+__PAYLOAD="{
 	\"value\": \"$__IP\",
-	\"ttl\": $TTL,
-	\"type\": \"$TYPE\",
-	\"name\": \"$SUBDOMAIN\",
-	\"zone_id\": \"$zone_id\"
+	\"ttl\": $__TTL,
+	\"type\": \"$__TYPE\",
+	\"name\": \"$__SUBDOMAIN\",
+	\"zone_id\": \"$__ZONE_ID\"
 }"
-if [ $(echo "$id" | wc -l) -eq 1 ] && [ "$result_code" -eq 0 ]; then
-	echo "Info: Record found. Updating..." >&2
-	exec curl -s -L -X "PUT" -H Auth-API-Token": $TOKEN" \
-		-d "$payload" \
-		"$API_URL/records/$id" > /dev/null
-elif [ $(echo "$id" | wc -l) -eq 0 ]; then
-	echo "Info: No Record yet. Create a new one..." >&2
 
-	exec curl -s -L -X "POST" -H Auth-API-Token": $TOKEN" \
-		-d "$payload" \
-		$API_URL/records > /dev/null
+if [ $(echo "$__ID" | wc -l) -eq 1 ] && [ "$__RESULT_CODE" -eq 0 ]; then
+	write_log 7 "Info: Record found. Updating..."
+	curl -s -L -X "PUT" -H Auth-API-Token": $password" \
+		-d "$__PAYLOAD" \
+		"$__API_URL/records/$__ID" > /dev/null
+
+	write_log 7 "DDNS Provider answered:\n$(cat $DATFILE)"
+elif [ "x$__ID" = "x" ]; then
+	write_log 7 "Info: No Record yet. Create a new one..."
+
+	curl -s -L -X "POST" -H Auth-API-Token": $password" \
+		-d "$__PAYLOAD" \
+		$__API_URL/records > /dev/null
+
+	write_log 7 "DDNS Provider answered:\n$(cat $DATFILE)"
 else
-	echo "ERROR: Multiple entries. This is wrong" >&2
-	exit 1
+	write_log 14 "ERROR: Multiple entries. This is wrong"
 fi
